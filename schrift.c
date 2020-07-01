@@ -137,8 +137,6 @@ static void draw_line(struct buffer buf, struct point origin, struct point goal)
 static void draw_lines(struct outline *outl, struct buffer buf);
 /* post-processing */
 static void post_process(struct buffer buf, uint8_t *image);
-/* glyph rendering */
-static int render_image(const struct SFT *sft, unsigned long offset, double transform[6], struct SFT_Char *chr);
 
 /* function implementations */
 
@@ -292,12 +290,17 @@ sft_kerning(const struct SFT *sft, unsigned long leftChar, unsigned long rightCh
 int
 sft_char(const struct SFT *sft, unsigned long charCode, struct SFT_Char *chr)
 {
-	double transform[6];
 	double xScale, yScale, xOff, yOff;
 	long glyph, outline;
 	int unitsPerEm;
 	int advance, leftSideBearing;
 	int x1, y1, x2, y2;
+
+	double transform[6];
+	struct outline outl;
+	struct buffer buf;
+	void *image;
+	int width, height;
 
 	memset(chr, 0, sizeof(*chr));
 
@@ -368,12 +371,43 @@ sft_char(const struct SFT *sft, unsigned long charCode, struct SFT_Char *chr)
 		transform[3] = yScale;
 		transform[4] = xOff - x1;
 		transform[5] = yOff - y1;
-	
-		if (render_image(sft, outline, transform, chr) < 0)
+
+		width = x2 - x1;
+		height = y2 - y1;
+
+		if (init_outline(&outl) < 0)
 			return -1;
+		if (decode_outline(sft->font, outline, 0, &outl) < 0)
+			goto fail_with_outl;
+
+		transform_points(outl.numPoints, outl.points, transform);
+		clip_points(outl.numPoints, outl.points, width, height);
+
+		if (tesselate_curves(&outl) < 0)
+			goto fail_with_outl;
+
+		if (init_buffer(&buf, width, height) < 0)
+			goto fail_with_outl;
+		draw_lines(&outl, buf);
+		free_outline(&outl);
+		if (sft->flags & SFT_DOWNWARD_Y) flip_buffer(&buf);
+
+		if ((image = calloc(width * height, 1)) == NULL)
+			goto fail_with_buf;
+		post_process(buf, image);
+		free_buffer(&buf);
+
+		chr->image = image;
 	}
 
 	return glyph == 0;
+
+fail_with_outl:
+	free_outline(&outl);
+	return -1;
+fail_with_buf:
+	free_buffer(&buf);
+	return -1;
 }
 
 static int
@@ -440,18 +474,22 @@ clip_points(int numPts, struct point *points, int width, int height)
 		pt = points[i];
 
 		if (pt.x < 0.0) {
+			/* printf("negative x\n"); */
 			points[i].x = 0.0;
 		}
 		if (pt.x >= width) {
+			/* printf("too large x\n"); */
 			dv = width;
 			ip = (void *) &dv;
 			--*ip;
 			points[i].x = dv;
 		}
 		if (pt.y < 0.0) {
+			/* printf("negative y\n"); */
 			points[i].y = 0.0;
 		}
 		if (pt.y >= height) {
+			/* printf("too large y\n"); */
 			dv = height;
 			ip = (void *) &dv;
 			--*ip;
@@ -1325,35 +1363,5 @@ post_process(struct buffer buf, uint8_t *image)
 			accum += cell.cover;
 		}
 	}
-}
-
-static int
-render_image(const struct SFT *sft, unsigned long offset, double transform[6], struct SFT_Char *chr)
-{
-	struct outline outl;
-	struct buffer buf;
-	int err = 0;
-
-	memset(&outl, 0, sizeof(outl));
-	memset(&buf, 0, sizeof(buf));
-
-	err = err || init_outline(&outl) < 0;
-	err = err || decode_outline(sft->font, offset, 0, &outl) < 0;
-	if (!err) transform_points(outl.numPoints, outl.points, transform);
-	if (!err) clip_points(outl.numPoints, outl.points, chr->width, chr->height);
-	err = err || tesselate_curves(&outl) < 0;
-
-	err = err || init_buffer(&buf, chr->width, chr->height) < 0;
-	if (!err) draw_lines(&outl, buf);
-	free_outline(&outl);
-	if (!err && sft->flags & SFT_DOWNWARD_Y)
-		flip_buffer(&buf);
-
-	err = err || (chr->image = calloc(chr->width * chr->height, 1)) == NULL;
-	if (!err) post_process(buf, chr->image);
-
-	free_buffer(&buf);
-
-	return err ? -1 : 0;
 }
 
