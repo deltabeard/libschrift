@@ -287,6 +287,139 @@ sft_kerning(const struct SFT *sft, unsigned long leftChar, unsigned long rightCh
 	return 0;
 }
 
+struct RenderCookie
+{
+	double xOrigin;
+	double yOrigin;
+	unsigned long outline;
+};
+
+static int
+query_glyph(const struct SFT *sft, unsigned long glyph, struct SFT_Char *chr, struct RenderCookie *rc)
+{
+	double xScale, yScale, xOff, yOff;
+	long glyph, outline;
+	int unitsPerEm;
+	int advance, leftSideBearing;
+	int x1, y1, x2, y2;
+
+	memset(chr, 0, sizeof(*chr));
+
+	/* Set up the initial transformation from
+	 * glyph coordinate space to SFT coordinate space. */
+	if ((unitsPerEm = units_per_em(sft->font)) < 0)
+		return -1;
+	xScale = sft->xScale / unitsPerEm;
+	yScale = sft->yScale / unitsPerEm;
+	xOff = sft->x;
+	yOff = sft->y;
+
+	if (hor_metrics(sft->font, glyph, &advance, &leftSideBearing) < 0)
+		return -1;
+	/* We can compute the advance width early because the scaling factors
+	 * won't be changed. This is neccessary for glyphs with completely
+	 * empty outlines. */
+	chr->advance = (int) round(advance * xScale);
+
+	if ((outline = outline_offset(sft->font, glyph)) < 0)
+		return -1;
+	rc->outline = outline;
+	/* A glyph may have a completely empty outline. */
+	if (!outline)
+		return 0;
+
+	/* Read the bounding box from the font file verbatim. */
+	if (sft->font->size < (unsigned long) outline + 10)
+		return -1;
+	x1 = geti16(sft->font, outline + 2);
+	y1 = geti16(sft->font, outline + 4);
+	x2 = geti16(sft->font, outline + 6);
+	y2 = geti16(sft->font, outline + 8);
+	if (x2 <= x1 || y2 <= y1)
+		return -1;
+
+	/* Shift the transformation along the X axis such that
+	 * x1 and leftSideBearing line up. Derivation:
+	 *     lsb * xScale + xOff_1 = x1 * xScale + xOff_2
+	 * <=> lsb * xScale + xOff_1 - x1 * xScale = xOff_2
+	 * <=> (lsb - x1) * xScale + xOff_1 = xOff_2 */
+	rc->xShift = (leftSideBearing - x1) * xScale;
+	xOff += rc->xShift;
+
+	/* Transform the bounding box into SFT coordinate space. */
+	x1 = (int) floor(x1 * xScale + xOff);
+	y1 = (int) floor(y1 * yScale + yOff);
+	x2 = (int) ceil(x2 * xScale + xOff) + 1;
+	y2 = (int) ceil(y2 * yScale + yOff) + 1;
+
+	rc->xOrigin = x1 - xShift;
+	rc->yOrigin = y1;
+
+	/* Compute the user-facing bounding box, respecting Y direction etc. */
+	chr->x = x1;
+	chr->y = sft->flags & SFT_DOWNWARD_Y ? -y2 : y1;
+	chr->width = x2 - x1;
+	chr->height = y2 - y1;
+
+	return 0;
+}
+
+static int
+render_glyph(const struct SFT *sft, struct SFT_Char *chr, const struct RenderCookie *rc)
+{
+	double transform[6];
+	struct outline outl;
+	struct buffer buf;
+	int unitsPerEm;
+
+	/* Set up the transformation matrix such that
+	 * the transformed bounding boxes min corner lines
+	 * up with the (0, 0) point. */
+	if ((unitsPerEm = units_per_em(sft->font)) < 0)
+		return -1;
+	transform[0] = sft->xScale / unitsPerEm;
+	transform[1] = 0.0;
+	transform[2] = 0.0;
+	transform[3] = sft->yScale / unitsPerEm;
+	transform[4] = sft->x - rc->xOrigin;
+	transform[5] = sft->y - rc->yOrigin;
+
+	/* TTF --> outline */
+	if (init_outline(&outl) < 0)
+		return -1;
+	if (decode_outline(sft->font, rc->outline, 0, &outl) < 0)
+		goto fail_with_outl;
+
+	/* outline processing */
+	transform_points(outl.numPoints, outl.points, transform);
+	clip_points(outl.numPoints, outl.points, chr->width, chr->height);
+	if (tesselate_curves(&outl) < 0)
+		goto fail_with_outl;
+	
+	/* outline --> buffer */
+	if (init_buffer(&buf, chr->width, chr->height) < 0)
+		goto fail_with_outl;
+	draw_lines(&outl, buf);
+	free_outline(&outl);
+	if (sft->flags & SFT_DOWNWARD_Y) flip_buffer(&buf);
+	
+	/* buffer --> image */
+	if ((chr->image = calloc(chr->width * chr->height, 1)) == NULL)
+		goto fail_with_buf;
+	post_process(buf, chr->image);
+	free_buffer(&buf);
+
+	return 0;
+
+fail_with_outl:
+	free_outline(&outl);
+	return -1;
+
+fail_with_buf:
+	free_buffer(&buf);
+	return -1;
+}
+
 int
 sft_char(const struct SFT *sft, unsigned long charCode, struct SFT_Char *chr)
 {
@@ -308,6 +441,8 @@ sft_char(const struct SFT *sft, unsigned long charCode, struct SFT_Char *chr)
 		return -1;
 	if (glyph == 0 && (sft->flags & SFT_CATCH_MISSING))
 		return 1;
+	if ((outline = outline_offset(sft->font, glyph)) < 0)
+		return -1;
 
 	/* Set up the initial transformation from
 	 * glyph coordinate space to SFT coordinate space. */
@@ -325,8 +460,6 @@ sft_char(const struct SFT *sft, unsigned long charCode, struct SFT_Char *chr)
 	 * empty outlines. */
 	chr->advance = (int) round(advance * xScale);
 
-	if ((outline = outline_offset(sft->font, glyph)) < 0)
-		return -1;
 	/* A glyph may have a completely empty outline. */
 	if (!outline)
 		return 0;
@@ -408,6 +541,38 @@ fail_with_outl:
 fail_with_buf:
 	free_buffer(&buf);
 	return -1;
+}
+
+int
+sft_querychar(const struct SFT *sft, unsigned long charCode, struct SFT_Char *chr)
+{
+	struct DrawCookie dc;
+	if (query_char(sft, charCode, &chr, &dc) < 0)
+		return -1;
+	return glyph == 0;
+}
+
+int
+sft_drawchar(const struct SFT *sft, unsigned long charCode, struct SFT_Char *chr)
+{
+	struct DrawCookie dc;
+	if (query_char(sft, charCode, &chr, &dc) < 0)
+		return -1;
+	if ((chr->image = draw_char(sft, &dc)) == NULL)
+		return -1;
+	return glyph == 0;
+}
+
+int
+sft_drawknchar(const struct SFT *sft, unsigned long charCode, struct SFT_Char *chr)
+{
+	struct DrawCookie dc;
+	if (query_char(&chr, &dc) < 0)
+		return -1;
+	if (glyph == 0) return 1;
+	if ((chr->image = draw_char(&dc)) == NULL)
+		return -1;
+	return 0;
 }
 
 static int
