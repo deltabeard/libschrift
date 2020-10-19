@@ -43,7 +43,10 @@ struct SFT
 
 struct SFT_Char
 {
+	/* 8-bit Greyscale bitmap of character. */
 	void *image;
+
+	/* Width to advance after character. */
 	double advance;
 	int x;
 	int y;

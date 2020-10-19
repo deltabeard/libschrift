@@ -1,54 +1,54 @@
-# See LICENSE file for copyright and license details.
+NAME		:= libschrift
+DESCRIPTION	:= A lightweight TrueType font rendering library.
+COMPANY		:= libschrift
+COPYRIGHT	:= Copyright (c) 2019, 2020 Thomas Oltmann
+LICENSE_SPDX	:= ISC
 
-.POSIX:
+# Default compiler options for GCC and Clang
+CC	:= cc
+OBJEXT	:= o
+RM	:= rm -f
+EXEOUT	:= -o
+CFLAGS	:= -std=c99 -pedantic -Wall -Wextra -O2 -g3
+EXE	:= $(NAME)
+LICENSE := $(COPYRIGHT); Released under the $(LICENSE_SPDX) License.
+GIT_VER := $(shell git describe --dirty --always --tags --long)
 
-include config.mk
+define help_txt
+$(DESCRIPTION)
+$(NAME) comes with no build time options.
 
-.PHONY: all clean install uninstall
+$(LICENSE)
+endef
 
-all: libschrift.a sftdemo stress
+SRCS := sch2bmp.c schrift.c
+OBJS := $(SRCS:.c=.$(OBJEXT))
 
-libschrift.a: schrift.o
-	$(AR) rc $@ schrift.o
-	$(RANLIB) $@
-schrift.o: schrift.h
+# File extension ".exe" is automatically appended on MinGW and MSVC builds, even
+# if we don't ask for it.
+ifeq ($(OS),Windows_NT)
+	EXE := $(NAME).exe
+endif
 
-sftdemo: sftdemo.o util/aa_tree.o libschrift.a
-	$(LD) $(LDFLAGS) $@.o util/aa_tree.o -o $@ -L$(X11LIB) -L. -lX11 -lXrender -lschrift -lm
-sftdemo.o: sftdemo.c schrift.h util/arg.h util/utf8_to_utf32.h util/aa_tree.h
-	$(CC) -c $(CFLAGS) $(@:.o=.c) -o $@ $(CPPFLAGS) -I$(X11INC)
+ifeq ($(GIT_VER),)
+	GIT_VER := LOCAL
+endif
 
-stress: stress.o libschrift.a
-	$(LD) $(LDFLAGS) $@.o -o $@ -L. -lschrift -lm
-stress.o: stress.c schrift.h util/arg.h
-	$(CC) -c $(CFLAGS) $(@:.o=.c) -o $@ $(CPPFLAGS)
+all: $(NAME)
+$(NAME): $(OBJS) $(RES)
+	$(CC) $(CFLAGS) $(EXEOUT)$@ $^ $(LDFLAGS)
 
-util/aa_tree.o: util/aa_tree.c util/aa_tree.h
-	$(CC) -c $(CFLAGS) $(@:.o=.c) -o $@ $(CPPFLAGS)
+%.obj: %.c
+	$(CC) $(CFLAGS) /Fo$@ /c /TC $^
+
+%.res: %.rc
+	rc /nologo /DCOMPANY="$(COMPANY)" /DDESCRIPTION="$(DESCRIPTION)" \
+		/DLICENSE="$(LICENSE)" /DGIT_VER="$(GIT_VER)" \
+		/DNAME="$(NAME)" $^
 
 clean:
-	rm -f *.o
-	rm -f util/*.o
-	rm -f libschrift.a
-	rm -f sftdemo
-	rm -f stress
+	$(RM) *.$(OBJEXT) $(EXE) $(RES)
 
-install: libschrift.a schrift.h schrift.3
-	# libschrift.a
-	mkdir -p "$(DESTDIR)$(PREFIX)/lib"
-	cp -f libschrift.a "$(DESTDIR)$(PREFIX)/lib"
-	chmod 644 "$(DESTDIR)$(PREFIX)/lib/libschrift.a"
-	# schrift.h
-	mkdir -p "$(DESTDIR)$(PREFIX)/include"
-	cp -f schrift.h "$(DESTDIR)$(PREFIX)/include"
-	chmod 644 "$(DESTDIR)$(PREFIX)/include/schrift.h"
-	# schrift.3
-	mkdir -p "$(DESTDIR)$(MANPREFIX)/man3"
-	cp schrift.3 "$(DESTDIR)$(MANPREFIX)/man3"
-	chmod 644 "$(DESTDIR)$(MANPREFIX)/man3/schrift.3"
-
-uninstall:
-	rm -f "$(DESTDIR)$(PREFIX)/lib/libschrift.a"
-	rm -f "$(DESTDIR)$(PREFIX)/include/schrift.h"
-	rm -f "$(DESTDIR)$(MANPREFIX)/man3/schrift.3"
-
+help:
+	@cd
+	$(info $(help_txt))
