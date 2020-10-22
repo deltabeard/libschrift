@@ -1,252 +1,199 @@
-/* A simple command line application that shows how to use libschrift with X11 via XRender. */
-/* See LICENSE file for copyright and license details. */
-
-#include <stdio.h>
+#include <SDL.h>
 #include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
-#include <math.h>
+#include <stdio.h>
 
-#include <X11/Xlib.h>
-#include <X11/extensions/Xrender.h>
-#include <schrift.h>
+#include "schrift.h"
 
-#include "util/utf8_to_utf32.h"
-#include "util/aa_tree.h"
-#include "util/arg.h"
-
-#define APP_NAME "sftdemo"
-#define MAX_LINES 40
-#define LINE_LEN 200
-
-char *argv0;
-
-static char lines[MAX_LINES][LINE_LEN];
-static int numlines;
-
-static XRenderColor fgcolor, bgcolor;
-static Display *dpy;
-static int screen;
-static Atom wmDeleteWindow;
-static Window win;
-static Pixmap fgpix;
-static Picture pic, fgpic;
-static GlyphSet glyphset;
-static struct SFT sft;
-static XRenderPictFormat *format;
-static struct aa_tree loadedset;
-
-static void
-die(const char *msg)
+wchar_t *utf8_utf32(char *str)
 {
-	fprintf(stderr, "%s\n", msg);
-	exit(1);
+	size_t sz = mbstowcs(NULL, str, 0) + 1;
+	wchar_t *ret;
+
+	if(sz == (size_t)-1)
+		return NULL;
+
+	ret = SDL_malloc(sz);
+	if(ret == NULL)
+		goto out;
+
+	mbstowcs(ret, str, sz);
+
+out:
+	return ret;
 }
 
-static void
-usage(void)
+unsigned get_image_width(struct SFT *sft, wchar_t *str)
 {
-	fprintf(stderr,
-		"usage: %s [-v] [-f font file] [-s size in px] [-P] [text file]\n", argv0);
-}
+	unsigned width = 0;
 
-static int
-compare32(const void *v1, const void *v2, const void *userdata)
-{
-	(void) userdata;
-	const uint32_t *u1 = v1, *u2 = v2;
-	return *u1 - *u2;
-}
+	for(wchar_t *w = str; *w != L'\0'; w++)
+	{
+		struct SFT_Char chr;
 
-static void
-loadglyph(struct SFT *sft, unsigned int charCode)
-{
-	struct SFT_Char chr;
-	XGlyphInfo info;
-	Glyph glyph;
-	int stride, i;
+		if(sft_char(sft, *w, &chr) < 0)
+			continue;
 
-	if (sft_char(sft, charCode, &chr) < 0) {
-		printf("Couldn't load character '%c' (0x%02X).\n", charCode, charCode);
-		return;
+		width += chr.advance;
 	}
 
-	glyph = charCode;
-	info.x = -chr.x;
-	info.y = -chr.y;
-	info.width = chr.width;
-	info.height = chr.height;
-	info.xOff = (int) (chr.advance + 0.5); /* You *should* use round() here instead. */
-	info.yOff = 0;
-
-	stride = (chr.width + 3) & ~3;
-	char bitmap[stride * chr.height];
-	memset(bitmap, 0, stride * chr.height);
-	for (i = 0; i < chr.height; ++i)
-		memcpy(bitmap + i * stride, (char *) chr.image + i * chr.width, chr.width);
-	free(chr.image);
-
-	XRenderAddGlyphs(dpy, glyphset, &glyph, &info, 1, bitmap, stride * chr.height);
+	return width;
 }
 
-static void
-teardown(void)
+unsigned get_number_of_lines(wchar_t *str)
 {
-	aa_free(&loadedset);
-	sft_freefont(sft.font);
-	XCloseDisplay(dpy);
-	exit(0);
-}
+	unsigned lines = 1;
 
-static void
-drawtext(int x, int y, const char *text)
-{
-	uint32_t codepoints[256];
-	int length = utf8_to_utf32((const uint8_t *) text, codepoints, 256);
+	for(wchar_t *w = str; *w != L'\0'; w++)
+	{
+		if(*w != L'\n')
+			continue;
 
-	/* Strip non-printable characters. */
-	int w = 0;
-	for (int r = 0; r < length; ++r) {
-		if (codepoints[r] >= 0x20)
-			codepoints[w++] = codepoints[r];
-	}
-	length = w;
-
-	for (int i = 0; i < length; ++i) {
-		if (aa_get(&loadedset, &codepoints[i], NULL)) continue;
-		loadglyph(&sft, codepoints[i]);
-		aa_put(&loadedset, &codepoints[i], NULL);
+		lines++;
 	}
 
-	XRenderCompositeString32(dpy, PictOpOver,
-		fgpic, pic, NULL,
-		glyphset, 0, 0, x, y, codepoints, length);
+	return lines;
 }
 
-static void
-draw(int width, int height)
+char *open_and_read_file(const char *filename)
 {
-	XRenderFillRectangle(dpy, PictOpOver,
-		pic, &bgcolor, 0, 0, width, height);
+	FILE *f;
+	size_t s;
+	char *ret = NULL;
 
-	double ascent, descent, gap;
-	/* TODO check return value! */
-	sft_linemetrics(&sft, &ascent, &descent, &gap);
+	f = fopen(filename, "rb");
+	if(f == NULL)
+		goto out;
 
-	for (int i = 0; i < numlines; ++i) {
-		drawtext(20, ascent + gap + round((ascent + descent + gap) * 1.5) * i, lines[i]);
-	}
-}
+	fseek(f, 0, SEEK_END);
+	s = ftell(f);
+	rewind(f);
 
-static void
-handleevent(XEvent *ev)
-{
-	switch (ev->type) {
-	case Expose:
-		draw(ev->xexpose.width, ev->xexpose.height);
-		break;
-	case ClientMessage:
-		if ((Atom) ev->xclient.data.l[0] == wmDeleteWindow)
-			teardown();
-		break;
-	}
-}
-
-static void
-setupx(void)
-{
-	XRenderPictFormat *format;
-	XRenderPictureAttributes attr;
-
-	if (!(dpy = XOpenDisplay(NULL)))
-		die("Can't open X display\n");
-	screen = DefaultScreen(dpy);
-
-	/* TODO We probably should check here that the X11 server actually supports XRender. */
-
-	win = XCreateWindow(dpy, DefaultRootWindow(dpy), 0, 0, 600, 400, 0,
-	                    DefaultDepth(dpy, screen), InputOutput,
-	                    CopyFromParent, 0, NULL);
-	XStoreName(dpy, win, APP_NAME);
-	XSelectInput(dpy, win, ExposureMask);
-	wmDeleteWindow = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
-	XSetWMProtocols(dpy, win, &wmDeleteWindow, 1);
-	XMapRaised(dpy, win);
-
-	format = XRenderFindVisualFormat(dpy, DefaultVisual(dpy, screen));
-	pic = XRenderCreatePicture(dpy, win, format, 0, NULL);
-
-	fgpix = XCreatePixmap(dpy, win, 1, 1, 24);
-	format = XRenderFindStandardFormat(dpy, PictStandardRGB24);
-	attr.repeat = True;
-	fgpic = XRenderCreatePicture(dpy, fgpix, format, CPRepeat, &attr);
-	XRenderFillRectangle(dpy, PictOpSrc, fgpic, &fgcolor, 0, 0, 1, 1);
-}
-
-static void
-runx(void)
-{
-	XEvent ev;
-
-	while (!XNextEvent(dpy, &ev))
-		handleevent(&ev);
-}
-
-int
-main(int argc, char *argv[])
-{
-	const char *filename, *textfile;
-	double size;
-
-	filename = "resources/Ubuntu-R.ttf";
-	textfile = "resources/glass.utf8";
-	size = 16.0;
-	bgcolor = (XRenderColor) { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
-	fgcolor = (XRenderColor) { 0x0000, 0x0000, 0x0000, 0xFFFF };
-
-	ARGBEGIN {
-	case 'f':
-		filename = EARGF(usage());
-		break;
-	case 's':
-		size = atof(EARGF(usage()));
-		break;
-	case 'v':
-		printf("libschrift v%s\n", sft_version());
-		exit(0);
-	default:
-		usage();
-		exit(1);
-	} ARGEND
-	if (argc) {
-		textfile = *argv;
-		--argc, ++argv;
-	}
-	if (argc) {
-		usage();
-		exit(1);
+	ret = malloc(s);
+	if(ret == NULL)
+	{
+		fclose(f);
+		goto out;
 	}
 
-	FILE *file = fopen(textfile, "r");
-	if (file == NULL)
-		die("Can't open text file.");
-	while (numlines < MAX_LINES && fgets(lines[numlines++], LINE_LEN, file) != NULL) {}
-	fclose(file);
+	fread(ret, 1, s, f);
+	fclose(f);
 
-	setupx();
-
-	format = XRenderFindStandardFormat(dpy, PictStandardA8);
-	glyphset = XRenderCreateGlyphSet(dpy, format);
-
-	if ((sft.font = sft_loadfile(filename)) == NULL)
-		die("Can't load font file.");
-	sft.xScale = size;
-	sft.yScale = size;
-	sft.flags = SFT_DOWNWARD_Y | SFT_RENDER_IMAGE;
-
-	aa_init(&loadedset, 4, compare32, NULL);
-
-	runx();
-	return 0;
+out:
+	return ret;
 }
 
+int main(int argc, char *argv[])
+{
+	int ret = EXIT_FAILURE;
+	char *str = NULL;
+	const char font[] = "font.ttf";
+	struct SFT sft = {
+		.xScale = 64, .yScale = 64
+	};
+	SDL_Surface *image;
+	wchar_t *wstr = NULL;
+	int width = 0;
+	unsigned lines;
+
+	if(argc != 3)
+	{
+		puts("Usage: sch2bmp TEXT.txt OUT.bmp");
+		return 1;
+	}
+
+	if(SDL_Init(SDL_INIT_EVERYTHING) != 0)
+		goto err;
+
+
+	/* Prepare font. */
+	sft.font = sft_loadfile(font);
+	if(sft.font == NULL)
+	{
+		SDL_SetError("Unable to initialise font");
+		goto err;
+	}
+
+	str = open_and_read_file(argv[1]);
+	if(str == NULL)
+	{
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				"Unable to read text file %s", argv[1]);
+		goto err;
+	}
+
+	wstr = utf8_utf32(str);
+	width = get_image_width(&sft, wstr);
+	lines = get_number_of_lines(wstr);
+
+	/* Render image after we get the destination width. */
+	sft.flags |= SFT_RENDER_IMAGE;
+
+	image = SDL_CreateRGBSurfaceWithFormat(0, width,
+			lines * 64, 32,
+			SDL_PIXELFORMAT_ARGB32);
+
+	SDL_Color colors[256];
+	for(int i = 0; i < 256; i++)
+	{
+		colors[i].r = colors[i].g = colors[i].b = i;
+		colors[i].a = i;
+	}
+
+	SDL_SetPaletteColors(image->format->palette, colors, 0, 256);
+
+	for(wchar_t *wide = wstr; *wide != L'\0'; wide++)
+	{
+		struct SFT_Char chr;
+		static SDL_Rect dstr;
+		SDL_Surface *src;
+
+		if(*wide == L'\n')
+		{
+			dstr.y += 64;
+			continue;
+		}
+
+		if(sft_char(&sft, *wide, &chr) < 0)
+		{
+			SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+					"Couldn't load character 0x%04X.\n", *wide);
+			continue;
+		}
+
+		src = SDL_CreateRGBSurfaceWithFormatFrom(chr.image,
+				chr.width, chr.height,
+				8, chr.width,
+				SDL_PIXELFORMAT_INDEX8);
+		SDL_SetPaletteColors(src->format->palette, colors, 0, 256);
+
+		dstr.x += chr.x;
+		dstr.y += chr.y;
+		dstr.w = chr.width;
+		dstr.h = chr.height;
+
+		fprintf(stdout, "%c (%d,%d) (%d, %d) adv: %f\n",
+				*wide, chr.x, chr.y, chr.width, chr.height, chr.advance);
+
+		SDL_BlitSurface(src, NULL, image, &dstr);
+		dstr.x += chr.advance - chr.x;
+
+		SDL_FreeSurface(src);
+		SDL_free(chr.image);
+		fflush(stdout);
+	}
+
+	SDL_SaveBMP(image, argv[2]);
+	SDL_FreeSurface(image);
+	ret = EXIT_SUCCESS;
+
+out:
+	SDL_free(wstr);
+	free(str);
+	SDL_Quit();
+	return ret;
+
+err:
+	SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error: %s",
+			SDL_GetError());
+	goto out;
+}
