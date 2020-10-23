@@ -10,17 +10,23 @@
 
 wchar_t *utf8_utf32(char *str)
 {
-	size_t sz = mbstowcs(NULL, str, 0) + 1;
+	size_t len = mbstowcs(NULL, str, 0);
+	size_t sz;
 	wchar_t *ret;
 
-	if(sz == (size_t)-1)
+	/* Check if mbstowcs failed. */
+	if(len == (size_t)-1)
 		return NULL;
+
+	/* Add null char. */
+	len++;
+	sz = len * sizeof(wchar_t);
 
 	ret = malloc(sz);
 	if(ret == NULL)
 		goto out;
 
-	mbstowcs(ret, str, sz);
+	mbstowcs(ret, str, len);
 
 out:
 	return ret;
@@ -151,7 +157,7 @@ int main(int argc, char *argv[])
 		{
 			dstr.y += 64;
 			continue;
-	}
+		}
 #endif
 
 		if(sft_char(&sft, *wide, &chr) < 0)
@@ -204,7 +210,7 @@ int main(int argc, char *argv[])
 		FILE *f = fopen(filename, "wb");
 		fwrite(image, 1, BMP_SIZE(width, height), f);
 		fclose(f);
-}
+	}
 #endif
 
 	ret = EXIT_SUCCESS;
