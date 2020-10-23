@@ -1,19 +1,31 @@
 ifdef VSCMD_VER
 	CC := cl
-	CFLAGS := /W3
+	CFLAGS := /nologo /W3
 	OUTCMD := /Fe
+	OBJEXT := obj
+	EXEEXT := .exe
+	LDFLAGS := /link /SUBSYSTEM:CONSOLE
+	RM := del
 else
 	CC := cc
 	CFLAGS := -Og -g3 -std=c99 -pedantic -Wall -Wextra
 	OUTCMD := -o
+	OBJEXT := o
+	EXEEXT :=
+	LDLIBS += -lm
 endif
 
-SDL2_CFLAGS := $(shell pkg-config --cflags sdl2)
-SDL2_LDLIBS := $(shell pkg-config --libs sdl2)
+CFLAGS += $(CFLAGS_EXTRA)
 
-CFLAGS += -I.. $(SDL2_CFLAGS) $(CFLAGS_EXTRA)
-LDLIBS += -lm $(SDL2_LDLIBS)
+SRC := sftdemo.c schrift.c
+OBJ := $(SRC:.c=.$(OBJEXT))
 
-all: sftdemo
-sftdemo: sftdemo.o schrift.o
-	$(CC) $(CFLAGS) $(OUTCMD)$@ $^ $(LDLIBS)
+all: sftdemo$(EXEEXT)
+sftdemo$(EXEEXT): $(OBJ)
+	$(CC) $(CFLAGS) $(OUTCMD)$@ $^ $(LDFLAGS) $(LDLIBS)
+
+%.obj: %.c
+	$(CC) $(CFLAGS) /Fo$@ /c /TC $^
+
+clean:
+	$(RM) sftdemo$(EXEEXT) *.$(OBJEXT)
