@@ -3,47 +3,60 @@
 #include <stdio.h>
 
 #include "schrift.h"
+#include "utf8d.h"
 
-wchar_t *utf8_utf32(char *str)
+int utf8_utf32(char *s, uint32_t **w)
 {
-	size_t sz = mbstowcs(NULL, str, 0) + 1;
-	wchar_t *ret;
+	uint32_t state = UTF8_ACCEPT;
+	uint32_t *i;
 
-	if(sz == (size_t)-1)
-		return NULL;
+	SDL_assert(s != NULL);
+	SDL_assert(w != NULL);
 
-	ret = SDL_malloc(sz);
-	if(ret == NULL)
-		goto out;
+	/* If null, allocate enough memory for string. */
+	if(*w == NULL)
+	{
+		size_t sz = strlen(s) + 1;
+		*w = malloc(sz * sizeof(uint32_t));
+		if(*w == NULL)
+			return 1;
+	}
 
-	mbstowcs(ret, str, sz);
+	i = *w;
+	for(; *s; s++)
+	{
+		decode(&state, i, *s);
+		i++;
+	}
 
-out:
-	return ret;
+	*i = '\0';
+
+	return state;
 }
 
-unsigned get_image_width(struct SFT *sft, wchar_t *str)
+unsigned get_image_width(struct SFT *sft, uint32_t *w)
 {
 	unsigned width = 0;
+	struct SFT_Char chr;
 
-	for(wchar_t *w = str; *w != L'\0'; w++)
+	SDL_assert(w != NULL);
+
+	for(; *w; w++)
 	{
-		struct SFT_Char chr;
-
-		if(sft_char(sft, *w, &chr) < 0)
-			continue;
-
-		width += chr.advance;
+		if(sft_char(sft, *w, &chr) >= 0)
+			width += chr.advance;
 	}
 
 	return width;
 }
 
-unsigned get_number_of_lines(wchar_t *str)
+unsigned get_number_of_lines(uint32_t *w)
 {
 	unsigned lines = 1;
 
-	for(wchar_t *w = str; *w != L'\0'; w++)
+	SDL_assert(w != NULL);
+
+	for(; *w; w++)
 	{
 		if(*w != L'\n')
 			continue;
@@ -60,6 +73,8 @@ char *open_and_read_file(const char *filename)
 	size_t s;
 	char *ret = NULL;
 
+	SDL_assert(filename != NULL);
+
 	f = fopen(filename, "rb");
 	if(f == NULL)
 		goto out;
@@ -68,15 +83,17 @@ char *open_and_read_file(const char *filename)
 	s = ftell(f);
 	rewind(f);
 
-	ret = malloc(s);
+	ret = malloc(s + 1);
 	if(ret == NULL)
 	{
 		fclose(f);
 		goto out;
 	}
 
-	fread(ret, 1, s, f);
+	s = fread(ret, 1, s, f);
 	fclose(f);
+
+	ret[s] = '\0';
 
 out:
 	return ret;
@@ -86,42 +103,49 @@ int main(int argc, char *argv[])
 {
 	int ret = EXIT_FAILURE;
 	char *str = NULL;
-	const char font[] = "font.ttf";
+	char *arg_text, *arg_bmp, *arg_font;
 	struct SFT sft = {
 		.xScale = 64, .yScale = 64
 	};
 	SDL_Surface *image;
-	wchar_t *wstr = NULL;
+	uint32_t *wstr = NULL;
 	int width = 0;
 	unsigned lines;
 
-	if(argc != 3)
+	if(argc != 4)
 	{
-		puts("Usage: sch2bmp TEXT.txt OUT.bmp");
+		puts("Usage: sch2bmp TEXT.txt OUT.bmp FONT.ttf");
 		return 1;
 	}
 
-	if(SDL_Init(SDL_INIT_EVERYTHING) != 0)
+	/* Assign arguments. */
+	arg_text = argv[1];
+	arg_bmp = argv[2];
+	arg_font = argv[3];
+
+	if(SDL_Init(SDL_INIT_VIDEO) != 0)
 		goto err;
 
-
 	/* Prepare font. */
-	sft.font = sft_loadfile(font);
+	sft.font = sft_loadfile(arg_font);
 	if(sft.font == NULL)
 	{
 		SDL_SetError("Unable to initialise font");
 		goto err;
 	}
 
-	str = open_and_read_file(argv[1]);
+	str = open_and_read_file(arg_text);
 	if(str == NULL)
 	{
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-				"Unable to read text file %s", argv[1]);
+				"Unable to read text file %s", arg_text);
 		goto err;
 	}
 
-	wstr = utf8_utf32(str);
+	ret = utf8_utf32(str, &wstr);
+	if(ret != 0)
+		goto err;
+
 	width = get_image_width(&sft, wstr);
 	lines = get_number_of_lines(wstr);
 
@@ -141,7 +165,7 @@ int main(int argc, char *argv[])
 
 	SDL_SetPaletteColors(image->format->palette, colors, 0, 256);
 
-	for(wchar_t *wide = wstr; *wide != L'\0'; wide++)
+	for(uint32_t *wide = wstr; *wide != L'\0'; wide++)
 	{
 		struct SFT_Char chr;
 		static SDL_Rect dstr;
@@ -182,7 +206,7 @@ int main(int argc, char *argv[])
 		fflush(stdout);
 	}
 
-	SDL_SaveBMP(image, argv[2]);
+	SDL_SaveBMP(image, arg_bmp);
 	SDL_FreeSurface(image);
 	ret = EXIT_SUCCESS;
 
