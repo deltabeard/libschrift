@@ -168,7 +168,7 @@ int main(int argc, char *argv[])
 	for(uint32_t *wide = wstr; *wide != L'\0'; wide++)
 	{
 		struct SFT_Char chr;
-		static SDL_Rect dstr;
+		static SDL_Rect dstr = { 0 };
 		SDL_Surface *src;
 
 		if(*wide == L'\n')
@@ -190,8 +190,7 @@ int main(int argc, char *argv[])
 				SDL_PIXELFORMAT_INDEX8);
 		SDL_SetPaletteColors(src->format->palette, colors, 0, 256);
 
-		dstr.x += chr.x;
-		dstr.y += chr.y;
+		dstr.y = chr.y;
 		dstr.w = chr.width;
 		dstr.h = chr.height;
 
@@ -199,7 +198,7 @@ int main(int argc, char *argv[])
 				*wide, chr.x, chr.y, chr.width, chr.height, chr.advance);
 
 		SDL_BlitSurface(src, NULL, image, &dstr);
-		dstr.x += chr.advance - chr.x;
+		dstr.x += chr.advance;
 
 		SDL_FreeSurface(src);
 		SDL_free(chr.image);
@@ -211,7 +210,7 @@ int main(int argc, char *argv[])
 	ret = EXIT_SUCCESS;
 
 out:
-	SDL_free(wstr);
+	free(wstr);
 	free(str);
 	SDL_Quit();
 	return ret;
