@@ -37,6 +37,7 @@ int utf8_utf32(char *s, uint32_t **w)
 unsigned get_image_width(struct SFT *sft, uint32_t *w)
 {
 	unsigned width = 0;
+	unsigned line_width = 0;
 	struct SFT_Char chr;
 
 	SDL_assert(w != NULL);
@@ -44,7 +45,14 @@ unsigned get_image_width(struct SFT *sft, uint32_t *w)
 	for(; *w; w++)
 	{
 		if(sft_char(sft, *w, &chr) >= 0)
-			width += chr.advance;
+		{
+			line_width += chr.advance;
+			if(*w == '\n' && line_width > width)
+			{
+				width = line_width;
+				line_width = 0;
+			}
+		}
 	}
 
 	return width;
@@ -169,11 +177,13 @@ int main(int argc, char *argv[])
 	{
 		struct SFT_Char chr;
 		static SDL_Rect dstr = { 0 };
+		static unsigned line = 1;
 		SDL_Surface *src;
 
 		if(*wide == L'\n')
 		{
-			dstr.y += 64;
+			line++;
+			dstr.x = 0;
 			continue;
 		}
 
@@ -190,7 +200,7 @@ int main(int argc, char *argv[])
 				SDL_PIXELFORMAT_INDEX8);
 		SDL_SetPaletteColors(src->format->palette, colors, 0, 256);
 
-		dstr.y = chr.y;
+		dstr.y = chr.y + (line * 64);
 		dstr.w = chr.width;
 		dstr.h = chr.height;
 
