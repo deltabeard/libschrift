@@ -1,6 +1,7 @@
 #include <SDL.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "schrift.h"
 #include "utf8d.h"
@@ -46,7 +47,7 @@ unsigned get_image_width(struct SFT *sft, uint32_t *w)
 	{
 		if(sft_char(sft, *w, &chr) >= 0)
 		{
-			line_width += chr.advance;
+			line_width += (unsigned)ceil(chr.advance);
 			if(*w == '\n' && line_width > width)
 			{
 				width = line_width;
@@ -54,6 +55,9 @@ unsigned get_image_width(struct SFT *sft, uint32_t *w)
 			}
 		}
 	}
+
+	if(line_width > width)
+		width = line_width;
 
 	return width;
 }
@@ -146,7 +150,7 @@ int main(int argc, char *argv[])
 	if(str == NULL)
 	{
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-				"Unable to read text file %s", arg_text);
+			     "Unable to read text file %s", arg_text);
 		goto err;
 	}
 
@@ -157,66 +161,95 @@ int main(int argc, char *argv[])
 	width = get_image_width(&sft, wstr);
 	lines = get_number_of_lines(wstr);
 
+	SDL_assert(width > 0);
+	SDL_assert(lines > 0);
+
 	/* Render image after we get the destination width. */
 	sft.flags |= SFT_RENDER_IMAGE;
 
 	image = SDL_CreateRGBSurfaceWithFormat(0, width,
-			lines * 64, 32,
-			SDL_PIXELFORMAT_ARGB32);
+					       lines * 64, 32,
+					       SDL_PIXELFORMAT_ARGB32);
+	SDL_assert(image != NULL);
 
 	SDL_Color colors[256];
 	for(int i = 0; i < 256; i++)
 	{
-		colors[i].r = colors[i].g = colors[i].b = i;
+		colors[i].r = colors[i].g = colors[i].b = 0xFF;
 		colors[i].a = i;
 	}
 
-	SDL_SetPaletteColors(image->format->palette, colors, 0, 256);
+	//SDL_SetPaletteColors(image->format->palette, colors, 0, 256);
 
 	for(uint32_t *wide = wstr; *wide != L'\0'; wide++)
 	{
 		struct SFT_Char chr;
-		static SDL_Rect dstr = { 0 };
-		static unsigned line = 1;
 		SDL_Surface *src;
+		SDL_Rect src_rect;
+		static SDL_Rect dst_rect = {0};
 
 		if(*wide == L'\n')
 		{
-			line++;
-			dstr.x = 0;
-			continue;
+			//lines--;
+			dst_rect.x = 0;
+			if(lines > 0)
+				continue;
+
+			break;
 		}
 
 		if(sft_char(&sft, *wide, &chr) < 0)
 		{
 			SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-					"Couldn't load character 0x%04X.\n", *wide);
+				    "Couldn't load character 0x%04X.\n", *wide);
 			continue;
 		}
 
 		src = SDL_CreateRGBSurfaceWithFormatFrom(chr.image,
-				chr.width, chr.height,
-				8, chr.width,
-				SDL_PIXELFORMAT_INDEX8);
+							 chr.width, chr.height,
+							 8, chr.width,
+							 SDL_PIXELFORMAT_INDEX8);
+		SDL_assert(src != NULL);
 		SDL_SetPaletteColors(src->format->palette, colors, 0, 256);
 
-		dstr.y = chr.y + (line * 64);
-		dstr.w = chr.width;
-		dstr.h = chr.height;
+#if 0
+		src_rect.h = chr.height;
+		src_rect.w = chr.width;
+		src_rect.x = chr.x;
+		src_rect.y = chr.y;
+#endif
+
+		dst_rect.h = chr.height;
+		dst_rect.w = chr.width;
+		dst_rect.x += chr.x;
+		dst_rect.y = chr.y + ((lines - 1) * 64);
 
 		fprintf(stdout, "%c (%d,%d) (%d, %d) adv: %f\n",
-				*wide, chr.x, chr.y, chr.width, chr.height, chr.advance);
-
-		SDL_BlitSurface(src, NULL, image, &dstr);
-		dstr.x += chr.advance;
-
-		SDL_FreeSurface(src);
-		SDL_free(chr.image);
+			*wide, chr.x, chr.y, chr.width, chr.height, chr.advance);
 		fflush(stdout);
+
+		{
+			int blitret = SDL_BlitSurface(src, NULL, image, &dst_rect);
+			SDL_assert(blitret == 0);
+		}
+
+		dst_rect.x += chr.advance - chr.x;
+
+		free(chr.image);
+		SDL_FreeSurface(src);
 	}
 
 	SDL_SaveBMP(image, arg_bmp);
+	{
+		FILE *raw = fopen("output.data", "wb");
+		SDL_LockSurface(image);
+		fwrite(image->pixels, 1, image->h * image->pitch, raw);
+		fclose(raw);
+	}
+
 	SDL_FreeSurface(image);
+
+	sft_freefont(sft.font);
 	ret = EXIT_SUCCESS;
 
 out:
@@ -227,6 +260,6 @@ out:
 
 err:
 	SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error: %s",
-			SDL_GetError());
+		     SDL_GetError());
 	goto out;
 }
