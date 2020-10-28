@@ -189,8 +189,6 @@ int main(int argc, char *argv[])
 	for(int i = 0; i < 256; i++)
 		colors[i].a = i;
 
-	//SDL_SetPaletteColors(image->format->palette, colors, 0, 256);
-
 	for(uint32_t *wide = wstr; *wide != L'\0'; wide++)
 	{
 		struct SFT_Char chr;
