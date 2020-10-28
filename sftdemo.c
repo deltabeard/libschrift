@@ -123,6 +123,9 @@ int main(int argc, char *argv[])
 	uint32_t *wstr = NULL;
 	int width = 0;
 	unsigned lines;
+	double ascent, descent, gap;
+	unsigned u_descent;
+	const unsigned line_space = 64 / 4;
 
 	if(argc != 4)
 	{
@@ -146,6 +149,14 @@ int main(int argc, char *argv[])
 		goto err;
 	}
 
+	if(sft_linemetrics(&sft, &ascent, &descent, &gap) != 0)
+	{
+		SDL_SetError("Unable to obtain font line metrics");
+		goto err;
+	}
+
+	u_descent = round(descent);
+
 	str = open_and_read_file(arg_text);
 	if(str == NULL)
 	{
@@ -167,17 +178,16 @@ int main(int argc, char *argv[])
 	/* Render image after we get the destination width. */
 	sft.flags |= SFT_RENDER_IMAGE;
 
+	unsigned image_height = (lines * 64) + ((lines - 1) * line_space);
 	image = SDL_CreateRGBSurfaceWithFormat(0, width,
-					       lines * 64, 32,
+					       image_height, 32,
 					       SDL_PIXELFORMAT_ARGB32);
 	SDL_assert(image != NULL);
 
 	SDL_Color colors[256];
+	memset(colors, 0xFF, sizeof(colors));
 	for(int i = 0; i < 256; i++)
-	{
-		colors[i].r = colors[i].g = colors[i].b = 0xFF;
 		colors[i].a = i;
-	}
 
 	//SDL_SetPaletteColors(image->format->palette, colors, 0, 256);
 
@@ -188,9 +198,12 @@ int main(int argc, char *argv[])
 		SDL_Rect src_rect;
 		static SDL_Rect dst_rect = {0};
 
+		if(*wide == L'\r')
+			continue;
+
 		if(*wide == L'\n')
 		{
-			//lines--;
+			lines--;
 			dst_rect.x = 0;
 			if(lines > 0)
 				continue;
@@ -222,7 +235,7 @@ int main(int argc, char *argv[])
 		dst_rect.h = chr.height;
 		dst_rect.w = chr.width;
 		dst_rect.x += chr.x;
-		dst_rect.y = chr.y + ((lines - 1) * 64);
+		dst_rect.y = chr.y + ((lines - 1) * (64 + line_space)) + u_descent;
 
 		fprintf(stdout, "%c (%d,%d) (%d, %d) adv: %f\n",
 			*wide, chr.x, chr.y, chr.width, chr.height, chr.advance);
