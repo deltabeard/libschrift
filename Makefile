@@ -25,7 +25,7 @@ SDL2_LDLIBS ?= $(shell pkg-config --libs sdl2)
 CFLAGS += $(SDL2_CFLAGS) $(CFLAGS_EXTRA)
 LDLIBS += $(SDL2_LDLIBS)
 
-SRCS += sftdemo.c schrift.c
+SRCS += sftdemo.c schrift.c sdlsft.c
 OBJS += $(SRCS:.c=.$(OBJEXT))
 
 all: sftdemo

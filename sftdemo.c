@@ -1,11 +1,109 @@
 #include <SDL.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
 
-#include "schrift.h"
+#include "sdlsft.h"
 #include "utf8d.h"
 
+static int utf8_utf32(const char *s, Uint32 **w)
+{
+	uint32_t state = UTF8_ACCEPT;
+	uint32_t *i;
+
+	SDL_assert(s != NULL);
+	SDL_assert(w != NULL);
+
+	/* If null, allocate enough memory for string. */
+	if(*w == NULL)
+	{
+		size_t sz = strlen(s) + 1;
+		*w = SDL_malloc(sz * sizeof(Uint32));
+		if(*w == NULL)
+			return 1;
+	}
+
+	i = *w;
+	for(; *s; s++)
+	{
+		decode(&state, i, *s);
+		i++;
+	}
+
+	*i = '\0';
+
+	return state;
+}
+
+int main(int argc, char *argv[])
+{
+	const char str[] = "Hello world!";
+	Uint32 *wstr = NULL;
+	sdlsft *sft;
+	const char *font_location;
+	SDL_RWops *font;
+	void *font_mem = NULL;
+	unsigned long size;
+	int ret = 1;
+
+	if(argc != 2)
+	{
+		SDL_SetError("Invalid number of arguments.");
+		goto err;
+	}
+
+	font_location = argv[1];
+
+	if(SDL_Init(SDL_INIT_VIDEO) != 0)
+		goto err;
+
+	font = SDL_RWFromFile(font_location, "rb");
+	if(font == NULL)
+		goto err;
+
+	size = SDL_RWsize(font);
+	if(size == (unsigned long)-1)
+		goto err;
+
+	font_mem = SDL_malloc(size);
+	if(font_mem == NULL)
+		goto err;
+
+	SDL_RWread(font, font_mem, 1, size);
+	sft = sdlsft_init(128, font_mem, size);
+	if(sft == NULL)
+		goto err;
+
+	if(utf8_utf32(str, &wstr) != 0)
+	{
+		SDL_SetError("Unable to convert string to 32-bit.");
+		goto err;
+	}
+
+	SDL_Surface *out = sdlsft_render(sft, wstr);
+	SDL_SaveBMP(out, "out.bmp");
+	SDL_FreeSurface(out);
+
+	sdlsft_exit(sft);
+
+	if(SDL_RWclose(font) != 0)
+		goto err;
+
+	ret = 0;
+	SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Completed successfully.");
+
+out:
+	SDL_free(wstr);
+	SDL_free(font_mem);
+
+	if(SDL_WasInit(SDL_INIT_EVERYTHING) != 0)
+		SDL_Quit();
+
+	return ret;
+
+err:
+	SDL_LogError(SDL_LOG_CATEGORY_ERROR, "%s", SDL_GetError());
+	goto out;
+}
+
+#if 0
 int utf8_utf32(char *s, uint32_t **w)
 {
 	uint32_t state = UTF8_ACCEPT;
@@ -223,13 +321,6 @@ int main(int argc, char *argv[])
 		SDL_assert(src != NULL);
 		SDL_SetPaletteColors(src->format->palette, colors, 0, 256);
 
-#if 0
-		src_rect.h = chr.height;
-		src_rect.w = chr.width;
-		src_rect.x = chr.x;
-		src_rect.y = chr.y;
-#endif
-
 		dst_rect.h = chr.height;
 		dst_rect.w = chr.width;
 		dst_rect.x += chr.x;
@@ -254,7 +345,7 @@ int main(int argc, char *argv[])
 	{
 		FILE *raw = fopen("output.data", "wb");
 		SDL_LockSurface(image);
-		fwrite(image->pixels, 1, image->h * image->pitch, raw);
+		fwrite(image->pixels, 1, (size_t)image->h * (size_t)image->pitch, raw);
 		fclose(raw);
 	}
 
@@ -274,3 +365,4 @@ err:
 		     SDL_GetError());
 	goto out;
 }
+#endif
