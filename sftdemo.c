@@ -34,22 +34,32 @@ static int utf8_utf32(const char *s, Uint32 **w)
 
 int main(int argc, char *argv[])
 {
-	const char str[] = "Hello world!";
 	Uint32 *wstr = NULL;
 	sdlsft *sft;
-	const char *font_location;
+	const char *font_location, *input_file, *em_str;
+	char *input_str;
+	int em;
 	SDL_RWops *font;
 	void *font_mem = NULL;
 	unsigned long size;
 	int ret = 1;
 
-	if(argc != 2)
+	if(argc != 4)
 	{
 		SDL_SetError("Invalid number of arguments.");
 		goto err;
 	}
 
 	font_location = argv[1];
+	input_file = argv[2];
+	em_str = argv[3];
+
+	em = SDL_atoi(em_str);
+	if(em < 1)
+	{
+		SDL_SetError("EM must be positive or error occured.");
+		goto err;
+	}
 
 	if(SDL_Init(SDL_INIT_VIDEO) != 0)
 		goto err;
@@ -67,18 +77,51 @@ int main(int argc, char *argv[])
 		goto err;
 
 	SDL_RWread(font, font_mem, 1, size);
-	sft = sdlsft_init(128, font_mem, size);
+	sft = sdlsft_init(em, font_mem, size);
 	if(sft == NULL)
 		goto err;
 
-	if(utf8_utf32(str, &wstr) != 0)
+	{
+		SDL_RWops *f = SDL_RWFromFile(input_file, "rb");
+		unsigned long f_sz;
+
+		if(f == NULL)
+			goto err;
+
+		f_sz = SDL_RWsize(f);
+		input_str = SDL_malloc(f_sz + 1);
+		if(input_str == NULL)
+			goto err;
+
+		SDL_RWread(f, input_str, 1, f_sz);
+		SDL_RWclose(f);
+
+		input_str[f_sz] = '\0';
+	}
+
+	if(utf8_utf32(input_str, &wstr) != 0)
 	{
 		SDL_SetError("Unable to convert string to 32-bit.");
 		goto err;
 	}
 
+	SDL_free(input_str);
+
 	SDL_Surface *out = sdlsft_render(sft, wstr);
-	SDL_SaveBMP(out, "out.bmp");
+	if(out == NULL)
+		goto err;
+
+	{
+		unsigned long input_name_sz = SDL_strlen(input_file);
+		const char ext[] = ".bmp";
+		unsigned long bmp_name_sz = input_name_sz + sizeof(ext) + 1;
+		char *bmp_name = SDL_malloc(bmp_name_sz);
+
+		SDL_snprintf(bmp_name, bmp_name_sz, "%s%s", input_file, ext);
+		SDL_SaveBMP(out, bmp_name);
+		SDL_free(bmp_name);
+	}
+
 	SDL_FreeSurface(out);
 
 	sdlsft_exit(sft);
@@ -99,7 +142,7 @@ out:
 	return ret;
 
 err:
-	SDL_LogError(SDL_LOG_CATEGORY_ERROR, "%s", SDL_GetError());
+	SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "%s", SDL_GetError());
 	goto out;
 }
 

@@ -101,24 +101,26 @@ static const SDL_Colour gray2argb[256] = {
 	{ 0xFF, 0xFF, 0xFF, 0xFF }
 };
 
-static unsigned get_image_width(struct SFT *sft, const Uint32 *w)
+static Uint32 get_image_width(struct SFT *sft, const Uint32 *w)
 {
-	unsigned width = 0;
-	unsigned line_width = 0;
+	Uint32 width = 0;
+	Uint32 line_width = 0;
 	struct SFT_Char chr;
 
 	SDL_assert(w != NULL);
 	SDL_assert(sft != NULL);
 	SDL_assert(sft->flags == 0);
 
-	for(; *w; w++)
+	for(; *w != L'\0'; w++)
 	{
 		if(sft_char(sft, *w, &chr) >= 0)
 		{
-			line_width += (unsigned)ceil(chr.advance);
-			if(*w == '\n' && line_width > width)
+			line_width += (unsigned)SDL_ceil(chr.advance);
+			if(*w == '\n')
 			{
-				width = line_width;
+				if(line_width > width)
+					width = line_width;
+
 				line_width = 0;
 			}
 		}
@@ -152,7 +154,7 @@ sdlsft *sdlsft_init(Uint32 em, const void *font_mem, unsigned long size)
 	sdlsft *ctx = SDL_calloc(1, sizeof(sdlsft));
 	double ascent_d, descent_d;
 
-	SDL_assert(em > 32);
+	SDL_assert(em >= 4);
 	SDL_assert(font_mem != NULL);
 	SDL_assert(size > 0);
 
